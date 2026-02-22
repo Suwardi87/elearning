@@ -2,22 +2,32 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\Course\IndexCourseRequest;
+use App\Http\Requests\Course\ShowCourseRequest;
+use App\Models\Course;
+use App\Services\CourseService;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class CourseController extends Controller
 {
+    public function __construct(
+        private readonly CourseService $courseService
+    ) {
+    }
+
     /**
-     * Menampilkan daftar course menggunakan data statis (dummy).
+     * Menampilkan daftar course dari database.
      */
-    public function index(): Response
+    public function index(IndexCourseRequest $request): Response
     {
-        $courses = $this->getCourses();
-        $levels = array_values(array_unique(array_column($courses, 'level')));
+        $filters = $request->validated();
+        $courses = $this->courseService->getCourseList($filters);
+        $levels = $this->courseService->getAvailableLevels();
 
         return Inertia::render('Courses', [
-            'courses' => $courses,
-            'courseCount' => count($courses),
+            'courses' => $courses->map(fn (Course $course) => $this->toCoursePayload($course))->values()->all(),
+            'courseCount' => $this->courseService->getTotalCourseCount(),
             'levels' => $levels,
         ]);
     }
@@ -25,45 +35,53 @@ class CourseController extends Controller
     /**
      * Menampilkan detail 1 course berdasarkan id.
      */
-    public function show(int $id): Response
+    public function show(ShowCourseRequest $request): Response
     {
-        // Cari course dari data dummy yang sama.
-        $course = collect($this->getCourses())->firstWhere('id', $id);
-
-        abort_unless($course, 404);
+        $courseId = (int) $request->validated('id');
+        $course = $this->courseService->getCourseById($courseId);
+        $completedTutorialIds = $this->getCompletedTutorialIds($request, $courseId);
+        $completedLessons = min(count($completedTutorialIds), $course->total_lessons);
+        $progressPercentage = $course->total_lessons > 0
+            ? (int) round(($completedLessons / $course->total_lessons) * 100)
+            : 0;
 
         return Inertia::render('CourseDetail', [
-            'course' => $course,
+            'course' => $this->toCoursePayload($course),
+            'progress' => [
+                'completed_lessons' => $completedLessons,
+                'total_lessons' => $course->total_lessons,
+                'percentage' => $progressPercentage,
+            ],
         ]);
     }
 
     /**
-     * Sumber data statis (tanpa database).
+     * Normalisasi payload supaya field yang dikirim ke frontend konsisten.
+     *
+     * @return array<string, mixed>
      */
-    private function getCourses(): array
+    private function toCoursePayload(Course $course): array
     {
         return [
-            [
-                'id' => 1,
-                'title' => 'Laravel Dasar untuk Project Nyata',
-                'description' => 'Belajar pondasi Laravel dengan studi kasus aplikasi e-learning sederhana.',
-                'level' => 'Beginner',
-                'total_lessons' => 12,
-            ],
-            [
-                'id' => 2,
-                'title' => 'Inertia.js + Vue 3 untuk Laravel',
-                'description' => 'Membangun halaman interaktif tanpa perlu API REST terpisah.',
-                'level' => 'Intermediate',
-                'total_lessons' => 10,
-            ],
-            [
-                'id' => 3,
-                'title' => 'Mini LMS: Dari Fitur ke Produk',
-                'description' => 'Merangkai modul belajar menjadi produk e-learning yang siap dipresentasikan.',
-                'level' => 'Advanced',
-                'total_lessons' => 14,
-            ],
+            'id' => $course->id,
+            'title' => $course->title,
+            'description' => $course->description,
+            'level' => $course->level,
+            'total_lessons' => $course->total_lessons,
+            'challenge_count' => $course->challenge_count,
         ];
+    }
+
+    /**
+     * Ambil daftar tutorial yang sudah selesai dari session per course.
+     *
+     * @return array<int, int>
+     */
+    private function getCompletedTutorialIds(ShowCourseRequest $request, int $courseId): array
+    {
+        $progress = (array) $request->session()->get('course_tutorial_progress', []);
+        $tutorialIds = (array) ($progress[$courseId] ?? []);
+
+        return array_values(array_unique(array_map(static fn ($id): int => (int) $id, $tutorialIds)));
     }
 }

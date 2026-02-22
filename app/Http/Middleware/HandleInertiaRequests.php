@@ -40,6 +40,9 @@ class HandleInertiaRequests extends Middleware
             // Shared props bisa dibaca di semua halaman Inertia melalui usePage().
             'appName' => config('app.name', 'E-Learning'),
             'appTagline' => 'Belajar coding sambil membangun produk nyata',
+            'flash' => [
+                'success' => fn () => $request->session()->get('success'),
+            ],
         ];
     }
 }
